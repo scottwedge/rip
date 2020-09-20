@@ -87,7 +87,7 @@ def create_ripping_guide(dvd_info):
         season = ask_season()
         episode_numbers = ask_episodes()
         guide['episodes'] = []
-        for episode_number in episode_numbers:
+        for episode_number in sorted(episode_numbers):
             print_title_and_chapter_info(dvd_info, show_chapters=False)
             disc_title = input(f'What title of the disc contains episode {episode_number}? ')
             print_title_and_chapter_info(dvd_info, only_title=disc_title)
