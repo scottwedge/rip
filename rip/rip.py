@@ -1,8 +1,9 @@
-import json
 from pathlib import Path
+from typing import List
+import json
+import os
 import subprocess
 import sys
-from typing import List
 
 def requirements_check():
     requirements_not_met = False
@@ -30,7 +31,7 @@ def print_title_and_chapter_info(dvd_info, only_title=None, show_chapters=True):
             for chapter_index, chapter in enumerate(dvd_info['tracks'][title_index]['chapters']):
                 print(f"\tChapter {chapter['chapter']} ({chapter['length']})")
 
-def create_ripping_guide(dvd_info):
+def create_ripping_guide(dvd_info, multi_feature_disc=False):
     # Here is a visual of the structure we are building.
     guide = {
         'disc_id': dvd_info['dvd']['dvdread id'],
@@ -46,11 +47,16 @@ def create_ripping_guide(dvd_info):
         #         'chapters': '',
         #     },
         # ],
-        # Movies will have a feature
-        # 'feature': {
-        #     'title': '',
-        #     'chapters': '',
-        # }
+        # Movies will have one or more features per disc
+        # It is rare that a disc has multiple features, but has been observed.
+        # 'features': [
+        #     {
+        #         'feature_title': '',
+        #         'filename': '',
+        #         'title': '',
+        #         'chapters': '',
+        #     },
+        # ]
     }
     def ask_movie_or_tv() -> str:
         print('Is this a:')
@@ -71,6 +77,9 @@ def create_ripping_guide(dvd_info):
     def ask_movie_title() -> str:
         return input('Movie Title: ').strip()
 
+    def ask_disc_title() -> str:
+        return input('Disc Title: ').strip()
+
     def ask_season() -> str:
         return input('Season #: ').strip().zfill(2)
 
@@ -79,7 +88,10 @@ def create_ripping_guide(dvd_info):
         episodes = [number.zfill(2) for number in sorted(list(set(response.split(','))))]
         return episodes
 
-    is_tv = ask_movie_or_tv() == 'tv'
+    if multi_feature_disc:
+        is_tv = False
+    else:
+        is_tv = ask_movie_or_tv() == 'tv'
     
     if is_tv:
         title = ask_tv_title()
@@ -101,15 +113,32 @@ def create_ripping_guide(dvd_info):
             }
             guide['episodes'].append(episode)
     else:
-        guide['title'] = ask_movie_title()
-        print_title_and_chapter_info(dvd_info, show_chapters=False)
-        disc_title = input(f'What title of the disc contains the feature? ')
-        print_title_and_chapter_info(dvd_info, only_title=disc_title)
-        disc_chapters = input(f'Which chapters of title {disc_title} make up the feature? (example: 1-5) ')
-        guide['feature'] = {
-            'title': disc_title,
-            'chapters': disc_chapters,
-        }
+        if multi_feature_disc:
+            title = ask_disc_title()
+        else:
+            title = ask_movie_title()
+        guide['title'] = title
+        guide['features'] = []
+        all_features_collected = False
+        while not all_features_collected:
+            if multi_feature_disc:
+                feature_title = ask_movie_title()
+            else:
+                feature_title = title
+            print_title_and_chapter_info(dvd_info, show_chapters=False)
+            disc_title = input(f'What title of the disc contains the feature? ')
+            print_title_and_chapter_info(dvd_info, only_title=disc_title)
+            disc_chapters = input(f'Which chapters of title {disc_title} make up the feature? (example: 1-5) ')
+            guide['features'].append({
+                'feature_title': feature_title,
+                'filename': f'{feature_title}.m4v',
+                'title': disc_title,
+                'chapters': disc_chapters,
+            })
+            if multi_feature_disc:
+                all_features_collected = not (input('\nDoes this disc have another feature? [y/n]').lower() == 'y')
+            else:
+                all_features_collected = True
     return guide
 
 def handbrake(drive_path, title, chapters, filename, preset='Fast 480p30'):
@@ -128,15 +157,17 @@ def handbrake(drive_path, title, chapters, filename, preset='Fast 480p30'):
     subprocess.run(handbrake_process_arguments, text=True)
 
 def rip_from(ripping_guide, drive_path):
-    dvd_rip_dir = f"{Path.home()}/dvd_rips/{ripping_guide['title']}"
-    Path(dvd_rip_dir).mkdir(parents=True, exist_ok=True)
     if 'episodes' in ripping_guide:
+        dvd_rip_dir = f"{Path.home()}/dvd_rips/{ripping_guide['title']}"
+        Path(dvd_rip_dir).mkdir(parents=True, exist_ok=True)
         for episode in ripping_guide['episodes']:
             Path(f"{dvd_rip_dir}/Season {episode['season']}").mkdir(parents=True, exist_ok=True)
             handbrake(drive_path, episode['title'], episode['chapters'], f"{dvd_rip_dir}/Season {episode['season']}/{episode['filename']}")
-    if 'feature' in ripping_guide:
-        feature = ripping_guide['feature']
-        handbrake(drive_path, feature['title'], feature['chapters'], f"{dvd_rip_dir}/{feature['filename']}")
+    if 'features' in ripping_guide:
+        for feature in ripping_guide['features']:
+            dvd_rip_dir = f"{Path.home()}/dvd_rips/{feature['feature_title']}"
+            Path(dvd_rip_dir).mkdir(parents=True, exist_ok=True)
+            handbrake(drive_path, feature['title'], feature['chapters'], f"{dvd_rip_dir}/{feature['filename']}")
     print('\n\nRipping Complete\n\n')
 
 DRIVE_PATH_CANDIDATES = ['/dev/rdisk2', '/dev/disk1', '/dev/disk2', '/dev/sr0', '/dev/sr1', '/dev/rdisk0', '/dev/rdisk1']
@@ -158,6 +189,8 @@ def main():
     """
     print(title)
     requirements_check()
+
+    multi_feature_disc = os.getenv('MULTI_FEATURE_DISC', default='false').lower() == 'true'
 
     dvd_info = None
     drive_path = None
@@ -189,7 +222,7 @@ def main():
     should_create_ripping_guide = input('\nCreate a ripping guide? [y/n]: ').lower() == 'y'
     if should_create_ripping_guide:
         # create a ripping guide
-        ripping_guide = create_ripping_guide(dvd_info)
+        ripping_guide = create_ripping_guide(dvd_info, multi_feature_disc)
 
     rip_from_guide = False
     if ripping_guide:
